@@ -20,10 +20,10 @@ app = Flask(__name__)
 
 
 # ==========================================
-# 2. HELPER FUNCTIONS & AUTH SETUP
+# 2. AUTOMATED REPAIR & FIXES
 # ==========================================
 def setup_kaggle_credentials():
-    """Configures the classic Kaggle CLI to look exactly where Render expects it."""
+    """Configures the classic Kaggle CLI credentials folder layout."""
     if not KAGGLE_KEY or not KAGGLE_USERNAME:
         print("⚠️ Kaggle credentials missing from Render environment variables!")
         return
@@ -32,16 +32,13 @@ def setup_kaggle_credentials():
     clean_key = KAGGLE_KEY.strip("'\" \n\r")
 
     try:
-        # Render's log explicitly asks for this exact path: /opt/render/.kaggle
         kaggle_dir = "/opt/render/.kaggle"
         os.makedirs(kaggle_dir, exist_ok=True)
         
-        # Inject directly into environment variables
         os.environ['KAGGLE_CONFIG_DIR'] = kaggle_dir
         os.environ['KAGGLE_USERNAME'] = clean_username
         os.environ['KAGGLE_KEY'] = clean_key
 
-        # Create the standard kaggle.json file
         config_path = os.path.join(kaggle_dir, "kaggle.json")
         credentials = {"username": clean_username, "key": clean_key}
         with open(config_path, "w") as f:
@@ -50,15 +47,16 @@ def setup_kaggle_credentials():
         
         print(f"✅ Successfully built kaggle.json at {config_path}")
         
-        # 🎯 AUTO-FIX: Ensure kernel-metadata.json matches your username to prevent 401/403 errors
+        # Run local repository fixes
         fix_metadata_username(clean_username)
+        fix_notebook_kernelspec()
 
     except Exception as e:
         print(f"❌ Failed to set up Kaggle credentials: {e}")
 
 
 def fix_metadata_username(clean_username):
-    """Checks the notebook folder configuration and forces it to use your active username."""
+    """Ensures kernel-metadata.json relies on your active username."""
     metadata_path = "./notebook_folder/kernel-metadata.json"
     if os.path.exists(metadata_path):
         try:
@@ -69,7 +67,6 @@ def fix_metadata_username(clean_username):
             if "/" in current_id:
                 meta_user, slug = current_id.split("/", 1)
                 if meta_user != clean_username:
-                    print(f"✏️ Auto-correcting metadata username from '{meta_user}' to '{clean_username}'")
                     data["id"] = f"{clean_username}/{slug}"
                     with open(metadata_path, "w") as f:
                         json.dump(data, f, indent=4)
@@ -78,7 +75,54 @@ def fix_metadata_username(clean_username):
                 with open(metadata_path, "w") as f:
                     json.dump(data, f, indent=4)
         except Exception as e:
-            print(f"⚠️ Metadata auto-fix skipped: {e}")
+            print(f"⚠️ Metadata username sync skipped: {e}")
+
+
+def fix_notebook_kernelspec():
+    """🎯 AUTO-FIX: Inspects the notebook file and embeds missing Python 3 environment metadata."""
+    metadata_path = "./notebook_folder/kernel-metadata.json"
+    if not os.path.exists(metadata_path):
+        return
+
+    try:
+        with open(metadata_path, "r") as f:
+            meta_data = json.load(f)
+        
+        code_file_name = meta_data.get("code_file", "")
+        kernel_type = meta_data.get("kernel_type", "notebook")
+        
+        # Only inject if the project uses an actual notebook (.ipynb file)
+        if kernel_type == "notebook" and code_file_name.endswith(".ipynb"):
+            notebook_path = os.path.join("./notebook_folder", code_file_name)
+            
+            if os.path.exists(notebook_path):
+                try:
+                    with open(notebook_path, "r") as f:
+                        nb_data = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    # If file is completely empty or corrupted, create clean notebook shell boilerplate
+                    nb_data = {"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 2}
+                
+                if "metadata" not in nb_data:
+                    nb_data["metadata"] = {}
+                
+                # If kernelspec metadata is missing, inject standard Python 3 runtime structures
+                if "kernelspec" not in nb_data["metadata"] or not nb_data["metadata"]["kernelspec"]:
+                    print(f"🛠️ Embedding missing Python 3 environment metadata stamp into {code_file_name}")
+                    nb_data["metadata"]["kernelspec"] = {
+                        "display_name": "Python 3",
+                        "language": "python",
+                        "name": "python3"
+                    }
+                    if "language_info" not in nb_data["metadata"]:
+                        nb_data["metadata"]["language_info"] = {"name": "python"}
+                        
+                    with open(notebook_path, "w") as f:
+                        json.dump(nb_data, f, indent=4)
+            else:
+                print(f"⚠️ Notebook source target file '{code_file_name}' not found at {notebook_path}")
+    except Exception as e:
+        print(f"⚠️ Notebook environmental metadata fix skipped: {e}")
 
 
 # ==========================================
@@ -97,6 +141,9 @@ def trigger_kaggle_instance(message):
     chat_id = message.chat.id
     bot.send_message(chat_id, "🚀 Sending payload authentication keys to Kaggle API... Waking up GPU server nodes.")
     
+    # Run fixes again directly before pushing to ensure any local workspace runtime edits align
+    setup_kaggle_credentials()
+    
     try:
         result = subprocess.run(
             ["kaggle", "kernels", "push", "-p", "./notebook_folder"], 
@@ -113,7 +160,6 @@ def trigger_kaggle_instance(message):
             )
             bot.send_message(chat_id, success_msg, parse_mode="Markdown")
         else:
-            # Filter out Python 3.14 internal SyntaxWarnings to keep logs clean
             stderr_lines = result.stderr.splitlines()
             filtered_errors = [
                 line for line in stderr_lines 
