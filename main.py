@@ -50,16 +50,23 @@ def trigger_kaggle_instance(message):
     bot.send_message(chat_id, "🚀 Sending payload authentication keys to Kaggle API... Waking up GPU server nodes.")
     
     try:
-        # Pushes your local folder configuration directly to Kaggle's backend
+        # Run the push command
         result = subprocess.run(["kaggle", "kernels", "push", "-p", "./notebook_folder"], capture_output=True, text=True)
         
         if result.returncode == 0:
             bot.send_message(chat_id, "⚙️ **Kaggle Cloud Virtual Machine is Booting!**\nAllocating VRAM, mounting checkpoint weights, and initializing handlers.\n\n⏳ Please wait 2-3 minutes; the Video Generation Engine will text you directly when online...")
         else:
-            bot.send_message(chat_id, f"❌ Kaggle API Handshake Refused:\n`{result.stderr}`", parse_mode="Markdown")
+            # 1. Grab whichever stream actually caught the error text
+            raw_error = result.stderr.strip() or result.stdout.strip() or f"Unknown error (Exit Code: {result.returncode})"
+            
+            # 2. Clean up the error message text to make sure it doesn't break Telegram parsing
+            clean_error = raw_error.replace("`", "").replace("*", "").replace("_", "")
+            
+            # 3. Send it without strict markdown to guarantee it shows up
+            bot.send_message(chat_id, f"❌ Kaggle API Handshake Refused:\n\n{clean_error}")
             
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Controller Exception: `{str(e)}`", parse_mode="Markdown")
+        bot.send_message(chat_id, f"❌ Controller Exception: {str(e)}")
 
 # Run Telegram Polling in a background thread so it doesn't block the web server
 def run_tg_bot():
