@@ -23,58 +23,62 @@ app = Flask(__name__)
 # 2. HELPER FUNCTIONS & AUTH SETUP
 # ==========================================
 def setup_kaggle_credentials():
-    """Configures system variables dynamically based on token type."""
-    if not KAGGLE_KEY:
-        print("⚠️ Kaggle API Key/Token environment variable is missing. Skipping setup.")
+    """Configures the classic Kaggle CLI to look exactly where Render expects it."""
+    if not KAGGLE_KEY or not KAGGLE_USERNAME:
+        print("⚠️ Kaggle credentials missing from Render environment variables!")
         return
 
+    clean_username = KAGGLE_USERNAME.strip("'\" \n\r")
     clean_key = KAGGLE_KEY.strip("'\" \n\r")
-    
+
     try:
-        kaggle_dir = os.path.expanduser("~/.kaggle")
+        # Render's log explicitly asks for this exact path: /opt/render/.kaggle
+        kaggle_dir = "/opt/render/.kaggle"
         os.makedirs(kaggle_dir, exist_ok=True)
+        
+        # Inject directly into environment variables
         os.environ['KAGGLE_CONFIG_DIR'] = kaggle_dir
+        os.environ['KAGGLE_USERNAME'] = clean_username
+        os.environ['KAGGLE_KEY'] = clean_key
 
-        # Wipe out old physical files to prevent stale credential mixing
-        for stale_file in ["kaggle.json", "accesstoken"]:
-            stale_path = os.path.join(kaggle_dir, stale_file)
-            if os.path.exists(stale_path):
-                os.remove(stale_path)
+        # Create the standard kaggle.json file
+        config_path = os.path.join(kaggle_dir, "kaggle.json")
+        credentials = {"username": clean_username, "key": clean_key}
+        with open(config_path, "w") as f:
+            json.dump(credentials, f)
+        os.chmod(config_path, 0o600)
+        
+        print(f"✅ Successfully built kaggle.json at {config_path}")
+        
+        # 🎯 AUTO-FIX: Ensure kernel-metadata.json matches your username to prevent 401/403 errors
+        fix_metadata_username(clean_username)
 
-        # 🎯 AUTO-DETECTION LOGIC FOR MODERN TOKENS
-        if clean_key.startswith("KGAT_"):
-            print("👁️ Modern standalone 'KGAT' token detected. Activating isolated Token authentication.")
-            
-            # Completely strip legacy environment footprints that cause conflicts
-            os.environ.pop('KAGGLE_USERNAME', None)
-            os.environ.pop('KAGGLE_KEY', None)
-            
-            # Apply modern credential properties exclusively
-            os.environ['KAGGLEAPITOKEN'] = clean_key
-            
-            token_path = os.path.join(kaggle_dir, "accesstoken")
-            with open(token_path, "w") as f:
-                f.write(clean_key)
-            os.chmod(token_path, 0o600)
-            
-        else:
-            print("👁️ Classic key format detected. Activating standard Username+Key pairing.")
-            clean_username = KAGGLE_USERNAME.strip("'\" \n\r") if KAGGLE_USERNAME else ""
-            
-            os.environ['KAGGLE_USERNAME'] = clean_username
-            os.environ['KAGGLE_KEY'] = clean_key
-            os.environ.pop('KAGGLEAPITOKEN', None)
-            
-            if clean_username:
-                credentials = {"username": clean_username, "key": clean_key}
-                config_path = os.path.join(kaggle_dir, "kaggle.json")
-                with open(config_path, "w") as f:
-                    json.dump(credentials, f)
-                os.chmod(config_path, 0o600)
-
-        print("✅ Credentials structural configuration synchronized successfully.")
     except Exception as e:
-        print(f"❌ Failed to build credentials file: {e}")
+        print(f"❌ Failed to set up Kaggle credentials: {e}")
+
+
+def fix_metadata_username(clean_username):
+    """Checks the notebook folder configuration and forces it to use your active username."""
+    metadata_path = "./notebook_folder/kernel-metadata.json"
+    if os.path.exists(metadata_path):
+        try:
+            with open(metadata_path, "r") as f:
+                data = json.load(f)
+            
+            current_id = data.get("id", "")
+            if "/" in current_id:
+                meta_user, slug = current_id.split("/", 1)
+                if meta_user != clean_username:
+                    print(f"✏️ Auto-correcting metadata username from '{meta_user}' to '{clean_username}'")
+                    data["id"] = f"{clean_username}/{slug}"
+                    with open(metadata_path, "w") as f:
+                        json.dump(data, f, indent=4)
+            else:
+                data["id"] = f"{clean_username}/{current_id}"
+                with open(metadata_path, "w") as f:
+                    json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Metadata auto-fix skipped: {e}")
 
 
 # ==========================================
@@ -109,6 +113,7 @@ def trigger_kaggle_instance(message):
             )
             bot.send_message(chat_id, success_msg, parse_mode="Markdown")
         else:
+            # Filter out Python 3.14 internal SyntaxWarnings to keep logs clean
             stderr_lines = result.stderr.splitlines()
             filtered_errors = [
                 line for line in stderr_lines 
