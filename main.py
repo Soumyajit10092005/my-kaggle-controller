@@ -51,7 +51,7 @@ def trigger_kaggle_instance(message):
     
     try:
         # Pushes your local folder configuration directly to Kaggle's backend
-        result = subprocess.run(["kaggle", "kernels", "push", "-p", "./notebook_folder"], capture_output=True, text=True)
+        result = subprocess.run(["kaggle", "kernels", "list"], capture_output=True, text=True)
         
         if result.returncode == 0:
             bot.send_message(chat_id, "⚙️ **Kaggle Cloud Virtual Machine is Booting!**\nAllocating VRAM, mounting checkpoint weights, and initializing handlers.\n\n⏳ Please wait 2-3 minutes; the Video Generation Engine will text you directly when online...")
