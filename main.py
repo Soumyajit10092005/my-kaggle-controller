@@ -103,13 +103,31 @@ def trigger_kaggle_instance(message):
             )
             bot.send_message(chat_id, success_msg, parse_mode="Markdown")
         else:
-            raw_error = result.stderr.strip() or result.stdout.strip() or f"Unknown error (Code: {result.returncode})"
-            clean_error = raw_error.replace("`", "").replace("*", "").replace("_", "")
-            bot.send_message(chat_id, f"❌ *Kaggle API Handshake Refused*:\n\n```\n{clean_error}\n```", parse_mode="Markdown")
+            # 💡 NEW: Filter out Python 3.14 internal SyntaxWarnings to uncover the real error
+            stderr_lines = result.stderr.splitlines()
+            filtered_errors = [
+                line for line in stderr_lines 
+                if "SyntaxWarning" not in line and "site-packages/kaggle" not in line
+            ]
+            
+            # Reconstruct the genuine error output
+            real_error = "\n".join(filtered_errors).strip()
+            
+            # If stderr was only warnings, fallback to check stdout
+            if not real_error:
+                real_error = result.stdout.strip() or f"Unknown execution fault (Exit Code: {result.returncode})"
+            
+            # Clean markdown breaking characters safely
+            clean_error = real_error.replace("`", "").replace("*", "").replace("_", "")
+            
+            bot.send_message(
+                chat_id, 
+                f"❌ *Kaggle API Handshake Refused*:\n\n```\n{clean_error}\n```", 
+                parse_mode="Markdown"
+            )
             
     except Exception as e:
         bot.send_message(chat_id, f"❌ Controller Exception:\n`{str(e)}`", parse_mode="Markdown")
-
 
 # ==========================================
 # 5. EXECUTION ROUTERS
