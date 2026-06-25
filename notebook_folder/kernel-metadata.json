@@ -1,24 +1,13 @@
-import json
-
-metadata = {
-  # The unique API identifier (username/url-slug)
-  "id": "fefgrgrtfhth/wangp-telegram-integrated", 
-  
-  # Your actual display title can stay exactly as it is on Kaggle
+{
+  "id": "fefgrgrtfhth/wangp-telegram-integrated",
   "title": "wanGP (Telegram Integrated)",
-  
-  "code_file": "run_ltx.py", 
+  "code_file": "wangp-telegram-integrated.ipynb",
   "language": "python",
-  "kernel_type": "script",
-  "is_private": True,
-  "enable_gpu": True,       
-  "enable_internet": True,  
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
   "dataset_sources": [],
   "kernel_sources": [],
   "competition_sources": []
 }
-
-with open('/kaggle/working/kernel-metadata.json', 'w') as f:
-    json.dump(metadata, f, indent=2)
-    
-print("✅ API Kernel Metadata profile initialized successfully.")
