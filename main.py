@@ -48,7 +48,7 @@ def setup_kaggle_credentials():
         
         # Apply corrections
         fix_metadata_username(clean_username)
-        fix_notebook_kernelspec()
+        fix_notebook_and_cells()
 
     except Exception as e:
         print(f"❌ Failed to set up Kaggle credentials: {e}")
@@ -75,7 +75,8 @@ def fix_metadata_username(clean_username):
             print(f"⚠️ Metadata username sync skipped: {e}")
 
 
-def fix_notebook_kernelspec():
+def fix_notebook_and_cells():
+    """🎯 FIXED: Injects python3 environments AND ensures an execution cell runs the written script."""
     metadata_path = "./notebook_folder/kernel-metadata.json"
     if not os.path.exists(metadata_path):
         return
@@ -92,20 +93,43 @@ def fix_notebook_kernelspec():
                 except:
                     nb_data = {"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 2}
                 
+                # Fix structural environment headers
                 if "metadata" not in nb_data:
                     nb_data["metadata"] = {}
                 if "kernelspec" not in nb_data["metadata"] or not nb_data["metadata"]["kernelspec"]:
                     nb_data["metadata"]["kernelspec"] = {
                         "display_name": "Python 3", "language": "python", "name": "python3"
                     }
-                    with open(notebook_path, "w") as f:
-                        json.dump(nb_data, f, indent=4)
+                
+                # Check cells to make sure it doesn't just save the file, but also EXECUTEs it
+                cells = nb_data.get("cells", [])
+                has_run_command = False
+                for cell in cells:
+                    source = cell.get("source", [])
+                    source_str = "".join(source) if isinstance(source, list) else str(source)
+                    if "python run_ltx.py" in source_str:
+                        has_run_command = True
+                        break
+                
+                if not has_run_command:
+                    print("🛠️ Auto-injecting run trigger cell (!python run_ltx.py) into the notebook deployment pipeline...")
+                    execution_cell = {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": ["!python run_ltx.py"]
+                    }
+                    cells.append(execution_cell)
+                    nb_data["cells"] = cells
+                
+                with open(notebook_path, "w") as f:
+                    json.dump(nb_data, f, indent=4)
     except Exception as e:
-        print(f"⚠️ Notebook metadata fix skipped: {e}")
+        print(f"⚠️ Notebook structural repair skipped: {e}")
 
 
 def get_kernel_id():
-    """Reads the current active kernel identifier string from metadata."""
     try:
         with open("./notebook_folder/kernel-metadata.json", "r") as f:
             return json.load(f).get("id", "")
@@ -117,7 +141,6 @@ def get_kernel_id():
 # 3. LIVE BACKGROUND PROGRESS TRACKER
 # ==========================================
 def track_kaggle_progress(chat_id, status_msg_id, kernel_id):
-    """Polls Kaggle API periodically and updates the Telegram UI message."""
     if not kernel_id:
         bot.edit_message_text("❌ Tracking failed: Could not determine Kernel ID.", chat_id, status_msg_id)
         return
@@ -126,42 +149,40 @@ def track_kaggle_progress(chat_id, status_msg_id, kernel_id):
     start_time = time.time()
     last_status = ""
     
-    # Maximum timeout protection (e.g., 20 minutes)
     while (time.time() - start_time) < 1200:
-        time.sleep(15)  # Poll every 15 seconds safely
+        time.sleep(15) 
         
         result = subprocess.run(
             ["kaggle", "kernels", "status", kernel_id],
             capture_output=True, text=True, env=os.environ
         )
-        
         output = result.stdout.lower() + result.stderr.lower()
         
-        # Parse Kaggle status outputs
         if "queued" in output:
             status, bar, details = "Queued", "░░░░░░░░░░ 0%", "⏳ Waiting for an available Kaggle GPU cluster node..."
+            ui_text = f"🟨 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}\n⏱️ Elapsed time: {int(time.time() - start_time)}s"
         elif "running" in output:
-            status, bar, details = "Running", "▓▓▓▓░░░░░░ 40%", "⚙️ Running code cells & generating artifacts..."
+            status, bar, details = "Running", "▓▓▓▓░░░░░░ 40%", "⚙️ Engine Online! Running code cells, spinning up Telegram dependencies, and mounting VRAM..."
+            ui_text = f"🟦 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}\n⏱️ Elapsed time: {int(time.time() - start_time)}s\n\n👉 *Keep an eye on your video bot conversation for the welcome message!*"
         elif "complete" in output:
-            status, bar, details = "Complete", "▓▓▓▓▓▓▓▓▓▓ 100%", "🏁 Job finished successfully! Check output folders."
+            status, bar, details = "Complete", "▓▓▓▓▓▓▓▓▓▓ 100%", "🏁 Instance runtime closed cleanly or user terminated via /exit command."
             ui_text = f"🟩 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}"
             bot.edit_message_text(ui_text, chat_id, status_msg_id, parse_mode="Markdown")
             break
         elif "error" in output or "failed" in output:
-            status, bar, details = "Failed", "██████████ CRASH", "❌ Internal code execution crashed inside the notebook."
-            ui_text = f"🟥 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}\n👉 Check your Kaggle panel logs for traceback."
+            status, bar, details = "Failed", "██████████ CRASH", "❌ Internal code execution crashed inside the notebook engine."
+            ui_text = f"🟥 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}\n👉 Check your Kaggle panel web UI console to read Python exceptions."
             bot.edit_message_text(ui_text, chat_id, status_msg_id, parse_mode="Markdown")
             break
         else:
             status, bar, details = "Unknown", "░░░░░░░░░░ ??%", "Connecting to Kaggle telemetry stream..."
+            ui_text = f"🟨 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}"
 
-        # Update message only if status text changes to minimize rate-limiting
-        ui_text = f"🟨 **Kaggle Server Status: {status}**\n`[{bar}]`\n\n{details}\n⏱️ Elapsed time: {int(time.time() - start_time)}s"
         if ui_text != last_status:
             try:
                 bot.edit_message_text(ui_text, chat_id, status_msg_id, parse_mode="Markdown")
                 last_status = ui_text
-            except Exception:
+            except:
                 pass
 
 
@@ -195,7 +216,6 @@ def trigger_kaggle_instance(message):
                 f"📡 **Payload Delivered Successfully!**\n\nStarting telemetry tracking engine for `{kernel_id}`...",
                 chat_id, status_msg.message_id
             )
-            # Spin up the background telemetry worker thread
             threading.Thread(
                 target=track_kaggle_progress, 
                 args=(chat_id, status_msg.message_id, kernel_id), 
