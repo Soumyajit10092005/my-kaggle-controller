@@ -2,6 +2,7 @@ import os
 import telebot
 import subprocess
 import threading
+import json
 from flask import Flask
 
 # 1. Fetch credentials securely from Render's Environment Variables
@@ -9,9 +10,30 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME")
 KAGGLE_KEY = os.environ.get("KAGGLE_KEY")
 
-# Map variables to the system environment so the Kaggle CLI tool can find them
-os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME
-os.environ['KAGGLE_KEY'] = KAGGLE_KEY
+# Create physical credentials file on disk to guarantee Kaggle CLI authentication
+if KAGGLE_USERNAME and KAGGLE_KEY:
+    try:
+        kaggle_dir = os.path.expanduser("~/.kaggle")
+        os.makedirs(kaggle_dir, exist_ok=True)
+        
+        credentials = {
+            "username": KAGGLE_USERNAME.strip("'\" "),
+            "key": KAGGLE_KEY.strip("'\" ")
+        }
+        
+        config_path = os.path.join(kaggle_dir, "kaggle.json")
+        with open(config_path, "w") as f:
+            json.dump(credentials, f)
+            
+        # Set strict read/write permissions required by Kaggle
+        os.chmod(config_path, 0o600)
+        print("✅ Physical kaggle.json created successfully on disk.")
+    except Exception as e:
+        print(f"❌ Failed to build credentials file: {e}")
+
+# Map variables to system environment as a backup
+os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME.strip("'\" ") if KAGGLE_USERNAME else ""
+os.environ['KAGGLE_KEY'] = KAGGLE_KEY.strip("'\" ") if KAGGLE_KEY else ""
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -28,7 +50,7 @@ def trigger_kaggle_instance(message):
     bot.send_message(chat_id, "🚀 Sending payload authentication keys to Kaggle API... Waking up GPU server nodes.")
     
     try:
-        # Changed path to relative './notebook_folder' for clean deployment compatibility
+        # Pushes your local folder configuration directly to Kaggle's backend
         result = subprocess.run(["kaggle", "kernels", "push", "-p", "./notebook_folder"], capture_output=True, text=True)
         
         if result.returncode == 0:
