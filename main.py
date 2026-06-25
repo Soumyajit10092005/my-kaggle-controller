@@ -1,82 +1,119 @@
 import os
-import telebot
-import subprocess
-import threading
 import json
+import threading
+import subprocess
 from flask import Flask
+import telebot
 
-# 1. Fetch credentials securely from Render's Environment Variables
+# ==========================================
+# 1. CONFIGURATION & CORE INITIALIZATION
+# ==========================================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME")
 KAGGLE_KEY = os.environ.get("KAGGLE_KEY")
 
-# Create physical credentials file on disk to guarantee Kaggle CLI authentication
-if KAGGLE_USERNAME and KAGGLE_KEY:
+if not BOT_TOKEN:
+    raise ValueError("❌ Critical Error: 'BOT_TOKEN' environment variable is missing!")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
+
+
+# ==========================================
+# 2. HELPER FUNCTIONS & AUTH SETUP
+# ==========================================
+def setup_kaggle_credentials():
+    """Configures system variables and writes physical Kaggle tokens to disk."""
+    if not KAGGLE_USERNAME or not KAGGLE_KEY:
+        print("⚠️ Kaggle environment variables are incomplete. Skipping disk setup.")
+        return
+
+    clean_username = KAGGLE_USERNAME.strip("'\" ")
+    clean_key = KAGGLE_KEY.strip("'\" ")
+
+    # Map variables to system environment (Legacy + New CLI standard)
+    os.environ['KAGGLE_USERNAME'] = clean_username
+    os.environ['KAGGLE_KEY'] = clean_key
+    os.environ['KAGGLEAPITOKEN'] = clean_key 
+
     try:
         kaggle_dir = os.path.expanduser("~/.kaggle")
         os.makedirs(kaggle_dir, exist_ok=True)
         
-        credentials = {
-            "username": KAGGLE_USERNAME.strip("'\" "),
-            "key": KAGGLE_KEY.strip("'\" ")
-        }
-        
+        # 1. Legacy JSON Authentication Style
+        credentials = {"username": clean_username, "key": clean_key}
         config_path = os.path.join(kaggle_dir, "kaggle.json")
         with open(config_path, "w") as f:
             json.dump(credentials, f)
-            
-        # Set strict read/write permissions required by Kaggle
         os.chmod(config_path, 0o600)
-        print("✅ Physical kaggle.json created successfully on disk.")
+
+        # 2. Modern Token Authentication Style
+        token_path = os.path.join(kaggle_dir, "accesstoken")
+        with open(token_path, "w") as f:
+            f.write(clean_key)
+        os.chmod(token_path, 0o600)
+
+        print("✅ All physical Kaggle credentials files synchronized to disk successfully.")
     except Exception as e:
         print(f"❌ Failed to build credentials file: {e}")
 
-# Map variables to system environment as a backup
-os.environ['KAGGLE_USERNAME'] = KAGGLE_USERNAME.strip("'\" ") if KAGGLE_USERNAME else ""
-os.environ['KAGGLE_KEY'] = KAGGLE_KEY.strip("'\" ") if KAGGLE_KEY else ""
 
-bot = telebot.TeleBot(BOT_TOKEN)
-
-# 2. Setup a lightweight Flask server to satisfy Render's port-binding rules
-app = Flask(__name__)
-
+# ==========================================
+# 3. FLASK WEB ROUTING
+# ==========================================
 @app.route('/')
 def home():
     return "⚡ Kaggle Controller Node is Online"
 
+
+# ==========================================
+# 4. TELEGRAM BOT EVENT HANDLERS
+# ==========================================
 @bot.message_handler(commands=['ready'])
 def trigger_kaggle_instance(message):
     chat_id = message.chat.id
     bot.send_message(chat_id, "🚀 Sending payload authentication keys to Kaggle API... Waking up GPU server nodes.")
     
     try:
-        # Run the push command
-        result = subprocess.run(["kaggle", "kernels", "push", "-p", "./notebook_folder"], capture_output=True, text=True)
+        # Execute the kernel push command cleanly
+        result = subprocess.run(
+            ["kaggle", "kernels", "push", "-p", "./notebook_folder"], 
+            capture_output=True, 
+            text=True
+        )
         
         if result.returncode == 0:
-            bot.send_message(chat_id, "⚙️ **Kaggle Cloud Virtual Machine is Booting!**\nAllocating VRAM, mounting checkpoint weights, and initializing handlers.\n\n⏳ Please wait 2-3 minutes; the Video Generation Engine will text you directly when online...")
+            success_msg = (
+                "⚙️ **Kaggle Cloud Virtual Machine is Booting!**\n"
+                "Allocating VRAM, mounting checkpoint weights, and initializing handlers.\n\n"
+                "⏳ Please wait 2-3 minutes; the Video Generation Engine will text you directly when online..."
+            )
+            bot.send_message(chat_id, success_msg)
         else:
-            # 1. Grab whichever stream actually caught the error text
-            raw_error = result.stderr.strip() or result.stdout.strip() or f"Unknown error (Exit Code: {result.returncode})"
-            
-            # 2. Clean up the error message text to make sure it doesn't break Telegram parsing
+            # Fallback capture stream extraction 
+            raw_error = result.stderr.strip() or result.stdout.strip() or f"Unknown error (Code: {result.returncode})"
             clean_error = raw_error.replace("`", "").replace("*", "").replace("_", "")
-            
-            # 3. Send it without strict markdown to guarantee it shows up
             bot.send_message(chat_id, f"❌ Kaggle API Handshake Refused:\n\n{clean_error}")
             
     except Exception as e:
         bot.send_message(chat_id, f"❌ Controller Exception: {str(e)}")
 
-# Run Telegram Polling in a background thread so it doesn't block the web server
+
+# ==========================================
+# 5. EXECUTION ROUTERS
+# ==========================================
 def run_tg_bot():
     print("📡 Starting Telegram listener loop...")
     bot.infinity_polling()
 
+
 if __name__ == "__main__":
-    # Start the bot thread
+    # 1. Initialize environment setup first
+    setup_kaggle_credentials()
+    
+    # 2. Fire up the Telegram polling thread background service
     threading.Thread(target=run_tg_bot, daemon=True).start()
     
-    # Start Flask web server on the port Render assigns dynamically
+    # 3. Spin up the primary Flask web process (Blocks main thread to keep service alive)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
