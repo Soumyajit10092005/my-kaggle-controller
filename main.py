@@ -23,50 +23,56 @@ app = Flask(__name__)
 # 2. HELPER FUNCTIONS & AUTH SETUP
 # ==========================================
 def setup_kaggle_credentials():
-    """Configures system variables, cleans tokens, and prints non-sensitive debug dimensions."""
+    """Configures system variables dynamically based on token type."""
     if not KAGGLE_KEY:
         print("⚠️ Kaggle API Key/Token environment variable is missing. Skipping setup.")
         return
 
-    # Deep clean quotes and trailing whitespaces/newlines
     clean_key = KAGGLE_KEY.strip("'\" \n\r")
-    clean_username = KAGGLE_USERNAME.strip("'\" \n\r") if KAGGLE_USERNAME else ""
-
-    # 🕵️‍♂️ SAFE LOGGING TO CHECK RENDER DASHBOARD INPUTS
-    print("--- 🔍 KAGGLE CREDENTIALS DIAGNOSTIC ---")
-    print(f"🤖 KAGGLE_USERNAME detected: '{clean_username}' (Length: {len(clean_username)} characters)")
-    if len(clean_key) > 8:
-        print(f"🔑 KAGGLE_KEY shape: {clean_key[:4]}...{clean_key[-4:]} (Length: {len(clean_key)} characters)")
-    else:
-        print(f"⚠️ KAGGLE_KEY looks dangerously short! (Length: {len(clean_key)} characters)")
-    print("---------------------------------------")
-
+    
     try:
         kaggle_dir = os.path.expanduser("~/.kaggle")
         os.makedirs(kaggle_dir, exist_ok=True)
         os.environ['KAGGLE_CONFIG_DIR'] = kaggle_dir
 
-        # Set environment parameters
-        if clean_username:
+        # Wipe out old physical files to prevent stale credential mixing
+        for stale_file in ["kaggle.json", "accesstoken"]:
+            stale_path = os.path.join(kaggle_dir, stale_file)
+            if os.path.exists(stale_path):
+                os.remove(stale_path)
+
+        # 🎯 AUTO-DETECTION LOGIC FOR MODERN TOKENS
+        if clean_key.startswith("KGAT_"):
+            print("👁️ Modern standalone 'KGAT' token detected. Activating isolated Token authentication.")
+            
+            # Completely strip legacy environment footprints that cause conflicts
+            os.environ.pop('KAGGLE_USERNAME', None)
+            os.environ.pop('KAGGLE_KEY', None)
+            
+            # Apply modern credential properties exclusively
+            os.environ['KAGGLEAPITOKEN'] = clean_key
+            
+            token_path = os.path.join(kaggle_dir, "accesstoken")
+            with open(token_path, "w") as f:
+                f.write(clean_key)
+            os.chmod(token_path, 0o600)
+            
+        else:
+            print("👁️ Classic key format detected. Activating standard Username+Key pairing.")
+            clean_username = KAGGLE_USERNAME.strip("'\" \n\r") if KAGGLE_USERNAME else ""
+            
             os.environ['KAGGLE_USERNAME'] = clean_username
-        os.environ['KAGGLE_KEY'] = clean_key
-        os.environ['KAGGLEAPITOKEN'] = clean_key 
+            os.environ['KAGGLE_KEY'] = clean_key
+            os.environ.pop('KAGGLEAPITOKEN', None)
+            
+            if clean_username:
+                credentials = {"username": clean_username, "key": clean_key}
+                config_path = os.path.join(kaggle_dir, "kaggle.json")
+                with open(config_path, "w") as f:
+                    json.dump(credentials, f)
+                os.chmod(config_path, 0o600)
 
-        # Generate legacy JSON target file
-        if clean_username:
-            credentials = {"username": clean_username, "key": clean_key}
-            config_path = os.path.join(kaggle_dir, "kaggle.json")
-            with open(config_path, "w") as f:
-                json.dump(credentials, f)
-            os.chmod(config_path, 0o600)
-
-        # Generate modern token target file
-        token_path = os.path.join(kaggle_dir, "accesstoken")
-        with open(token_path, "w") as f:
-            f.write(clean_key)
-        os.chmod(token_path, 0o600)
-
-        print("✅ Credentials structural files synchronization successful.")
+        print("✅ Credentials structural configuration synchronized successfully.")
     except Exception as e:
         print(f"❌ Failed to build credentials file: {e}")
 
@@ -103,31 +109,22 @@ def trigger_kaggle_instance(message):
             )
             bot.send_message(chat_id, success_msg, parse_mode="Markdown")
         else:
-            # 💡 NEW: Filter out Python 3.14 internal SyntaxWarnings to uncover the real error
             stderr_lines = result.stderr.splitlines()
             filtered_errors = [
                 line for line in stderr_lines 
                 if "SyntaxWarning" not in line and "site-packages/kaggle" not in line
             ]
             
-            # Reconstruct the genuine error output
             real_error = "\n".join(filtered_errors).strip()
-            
-            # If stderr was only warnings, fallback to check stdout
             if not real_error:
                 real_error = result.stdout.strip() or f"Unknown execution fault (Exit Code: {result.returncode})"
             
-            # Clean markdown breaking characters safely
             clean_error = real_error.replace("`", "").replace("*", "").replace("_", "")
-            
-            bot.send_message(
-                chat_id, 
-                f"❌ *Kaggle API Handshake Refused*:\n\n```\n{clean_error}\n```", 
-                parse_mode="Markdown"
-            )
+            bot.send_message(chat_id, f"❌ *Kaggle API Handshake Refused*:\n\n```\n{clean_error}\n```", parse_mode="Markdown")
             
     except Exception as e:
         bot.send_message(chat_id, f"❌ Controller Exception:\n`{str(e)}`", parse_mode="Markdown")
+
 
 # ==========================================
 # 5. EXECUTION ROUTERS
