@@ -23,7 +23,7 @@ app = Flask(__name__)
 # 2. HELPER FUNCTIONS & AUTH SETUP
 # ==========================================
 def setup_kaggle_credentials():
-    """Configures system variables and writes Kaggle tokens to disk based on modern vs legacy CLI specs."""
+    """Configures and writes ALL legacy and modern Kaggle credentials simultaneously."""
     if not KAGGLE_KEY:
         print("⚠️ Kaggle API Key/Token environment variable is missing. Skipping setup.")
         return
@@ -32,49 +32,34 @@ def setup_kaggle_credentials():
     clean_username = KAGGLE_USERNAME.strip("'\" ") if KAGGLE_USERNAME else ""
 
     try:
-        # Establish a rock-solid configuration directory
+        # Establish configuration directory
         kaggle_dir = os.path.expanduser("~/.kaggle")
         os.makedirs(kaggle_dir, exist_ok=True)
         
-        # 💡 FIX 1: Force the Kaggle CLI to look directly at this folder on Render
+        # Force the CLI to read directly from this folder path
         os.environ['KAGGLE_CONFIG_DIR'] = kaggle_dir
 
-        # 💡 FIX 2: Isolate legacy vs modern token sequencing to prevent conflicts
+        # 💡 FIX 1: Set ALL environment standards together (No more exclusive if/else)
         if clean_username:
-            # 🏢 LEGACY AUTH TYPE (username + key from old kaggle.json)
-            print("🔑 Configuring Legacy Kaggle credentials format...")
             os.environ['KAGGLE_USERNAME'] = clean_username
-            os.environ['KAGGLE_KEY'] = clean_key
-            os.environ.pop('KAGGLEAPITOKEN', None)  # Wipe new token variable to prevent collision
-            
+        os.environ['KAGGLE_KEY'] = clean_key
+        os.environ['KAGGLEAPITOKEN'] = clean_key  # Direct injection for new CLI v2
+
+        # 💡 FIX 2: Create the legacy kaggle.json file
+        if clean_username:
             credentials = {"username": clean_username, "key": clean_key}
             config_path = os.path.join(kaggle_dir, "kaggle.json")
             with open(config_path, "w") as f:
                 json.dump(credentials, f)
             os.chmod(config_path, 0o600)
-            
-            # Clear old modern files if they exist
-            token_path = os.path.join(kaggle_dir, "accesstoken")
-            if os.path.exists(token_path):
-                os.remove(token_path)
-        else:
-            # 🚀 MODERN AUTH TYPE (Standalone token from the new Kaggle UI)
-            print("⚡ Configuring Modern Standalone Kaggle API Token format...")
-            os.environ['KAGGLEAPITOKEN'] = clean_key
-            os.environ.pop('KAGGLE_USERNAME', None)
-            os.environ.pop('KAGGLE_KEY', None)
 
-            token_path = os.path.join(kaggle_dir, "accesstoken")
-            with open(token_path, "w") as f:
-                f.write(clean_key)
-            os.chmod(token_path, 0o600)
-            
-            # Clear old legacy files if they exist
-            config_path = os.path.join(kaggle_dir, "kaggle.json")
-            if os.path.exists(config_path):
-                os.remove(config_path)
+        # 💡 FIX 3: Create the modern standalone accesstoken file
+        token_path = os.path.join(kaggle_dir, "accesstoken")
+        with open(token_path, "w") as f:
+            f.write(clean_key)
+        os.chmod(token_path, 0o600)
 
-        print("✅ Kaggle credentials isolated and synchronized to environment successfully.")
+        print("✅ All legacy and modern Kaggle credentials synchronized to disk and environment successfully.")
     except Exception as e:
         print(f"❌ Failed to build credentials file: {e}")
 
@@ -96,7 +81,7 @@ def trigger_kaggle_instance(message):
     bot.send_message(chat_id, "🚀 Sending payload authentication keys to Kaggle API... Waking up GPU server nodes.")
     
     try:
-        # 💡 FIX 3: Explicitly feed 'env=os.environ' to ensure the execution binary sees the keys
+        # 💡 FIX 4: Explicitly pass env=os.environ so the subprocess inherits the keys
         result = subprocess.run(
             ["kaggle", "kernels", "push", "-p", "./notebook_folder"], 
             capture_output=True, 
