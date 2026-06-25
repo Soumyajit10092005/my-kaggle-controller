@@ -23,29 +23,36 @@ app = Flask(__name__)
 # 2. HELPER FUNCTIONS & AUTH SETUP
 # ==========================================
 def setup_kaggle_credentials():
-    """Configures and writes ALL legacy and modern Kaggle credentials simultaneously."""
+    """Configures system variables, cleans tokens, and prints non-sensitive debug dimensions."""
     if not KAGGLE_KEY:
         print("⚠️ Kaggle API Key/Token environment variable is missing. Skipping setup.")
         return
 
-    clean_key = KAGGLE_KEY.strip("'\" ")
-    clean_username = KAGGLE_USERNAME.strip("'\" ") if KAGGLE_USERNAME else ""
+    # Deep clean quotes and trailing whitespaces/newlines
+    clean_key = KAGGLE_KEY.strip("'\" \n\r")
+    clean_username = KAGGLE_USERNAME.strip("'\" \n\r") if KAGGLE_USERNAME else ""
+
+    # 🕵️‍♂️ SAFE LOGGING TO CHECK RENDER DASHBOARD INPUTS
+    print("--- 🔍 KAGGLE CREDENTIALS DIAGNOSTIC ---")
+    print(f"🤖 KAGGLE_USERNAME detected: '{clean_username}' (Length: {len(clean_username)} characters)")
+    if len(clean_key) > 8:
+        print(f"🔑 KAGGLE_KEY shape: {clean_key[:4]}...{clean_key[-4:]} (Length: {len(clean_key)} characters)")
+    else:
+        print(f"⚠️ KAGGLE_KEY looks dangerously short! (Length: {len(clean_key)} characters)")
+    print("---------------------------------------")
 
     try:
-        # Establish configuration directory
         kaggle_dir = os.path.expanduser("~/.kaggle")
         os.makedirs(kaggle_dir, exist_ok=True)
-        
-        # Force the CLI to read directly from this folder path
         os.environ['KAGGLE_CONFIG_DIR'] = kaggle_dir
 
-        # 💡 FIX 1: Set ALL environment standards together (No more exclusive if/else)
+        # Set environment parameters
         if clean_username:
             os.environ['KAGGLE_USERNAME'] = clean_username
         os.environ['KAGGLE_KEY'] = clean_key
-        os.environ['KAGGLEAPITOKEN'] = clean_key  # Direct injection for new CLI v2
+        os.environ['KAGGLEAPITOKEN'] = clean_key 
 
-        # 💡 FIX 2: Create the legacy kaggle.json file
+        # Generate legacy JSON target file
         if clean_username:
             credentials = {"username": clean_username, "key": clean_key}
             config_path = os.path.join(kaggle_dir, "kaggle.json")
@@ -53,13 +60,13 @@ def setup_kaggle_credentials():
                 json.dump(credentials, f)
             os.chmod(config_path, 0o600)
 
-        # 💡 FIX 3: Create the modern standalone accesstoken file
+        # Generate modern token target file
         token_path = os.path.join(kaggle_dir, "accesstoken")
         with open(token_path, "w") as f:
             f.write(clean_key)
         os.chmod(token_path, 0o600)
 
-        print("✅ All legacy and modern Kaggle credentials synchronized to disk and environment successfully.")
+        print("✅ Credentials structural files synchronization successful.")
     except Exception as e:
         print(f"❌ Failed to build credentials file: {e}")
 
@@ -81,7 +88,6 @@ def trigger_kaggle_instance(message):
     bot.send_message(chat_id, "🚀 Sending payload authentication keys to Kaggle API... Waking up GPU server nodes.")
     
     try:
-        # 💡 FIX 4: Explicitly pass env=os.environ so the subprocess inherits the keys
         result = subprocess.run(
             ["kaggle", "kernels", "push", "-p", "./notebook_folder"], 
             capture_output=True, 
@@ -110,11 +116,9 @@ def trigger_kaggle_instance(message):
 # ==========================================
 def run_tg_bot():
     try:
-        print("🧹 Clearing old Telegram webhooks and dropping pending updates...")
         bot.delete_webhook(drop_pending_updates=True)
     except Exception as e:
-        print(f"⚠️ Non-critical webhook cleanup warning: {e}")
-
+        pass
     print("📡 Starting Telegram listener loop...")
     bot.infinity_polling()
 
