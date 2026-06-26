@@ -14,216 +14,123 @@ import subprocess
 import psutil
 from PIL import Image
 
-# ==== THREAD-ISOLATED LOG ISOLATION ENGINE ====
-class ThreadSafeMuter:
-    def __init__(self, original_stream):
-        self.original_stream = original_stream
-        self.muted_threads = set()
-    def write(self, data):
-        if threading.get_ident() in self.muted_threads:
-            return
-        self.original_stream.write(data)
-    def flush(self):
-        try: self.original_stream.flush()
-        except: pass
+print("🚀 [Kaggle] run_ltx.py started...")
 
-sys.stdout = ThreadSafeMuter(sys.stdout)
-sys.stderr = ThreadSafeMuter(sys.stderr)
+# ====================== EARLY CONFIRMATION ======================
+try:
+    from kaggle_secrets import UserSecretsClient
+    import telebot
+    from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+    
+    BOT_TOKEN = UserSecretsClient().get_secret("TELEGRAM_BOT_TOKEN")
+    bot = telebot.TeleBot(BOT_TOKEN)
+    CHAT_ID = 1972666456   # ← Your personal chat ID
 
-class HideCurrentThreadLogs:
-    def __enter__(self):
-        current_id = threading.get_ident()
-        if hasattr(sys.stdout, "muted_threads"): sys.stdout.muted_threads.add(current_id)
-        if hasattr(sys.stderr, "muted_threads"): sys.stderr.muted_threads.add(current_id)
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        current_id = threading.get_ident()
-        if hasattr(sys.stdout, "muted_threads"): sys.stdout.muted_threads.discard(current_id)
-        if hasattr(sys.stderr, "muted_threads"): sys.stderr.muted_threads.discard(current_id)
+    bot.send_message(CHAT_ID, 
+        "⚡ **Kaggle Video Bot is ONLINE!**\n\n"
+        "✅ Successfully started on Kaggle GPU.\n"
+        "🔄 Loading heavy LTX model (this may take 8-15 minutes)...\n"
+        "You will get another message when model is ready.", 
+        parse_mode="Markdown")
+    print("✅ Early confirmation message sent!")
+except Exception as e:
+    print(f"❌ Early confirmation failed: {e}")
+    traceback.print_exc()
 
-# ---- bootstrap Wan2GP ----
-WAN2GP_DIR = os.path.abspath("Wan2GP")
-sys.path.insert(0, WAN2GP_DIR)
-os.chdir(WAN2GP_DIR)
-os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.5"
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# ====================== HEAVY MODEL LOADING ======================
+print("🔄 Starting Wan2GP + LTX Model Loading...")
 
-# ==== HOTPATCH THE LTX2 INTERNAL ENGINE BUG ====
-ltx2_path = os.path.join(WAN2GP_DIR, "models/ltx2/ltx2.py")
-if os.path.exists(ltx2_path):
-    with open(ltx2_path, "r") as f:
-        content = f.read()
-    old_line = "input_video_strength = max(0.0, min(1.0, input_video_strength))"
-    new_line = "input_video_strength = max(0.0, min(1.0, input_video_strength)) if input_video_strength is not None else 1.0"
-    if old_line in content:
-        content = content.replace(old_line, new_line)
-        with open(ltx2_path, "w") as f:
-            f.write(content)
-        print("✅ Core Engine Bug Patched Successfully inside ltx2.py!")
-sys.stdout.flush()
+try:
+    # Thread safe logging
+    class ThreadSafeMuter:
+        def __init__(self, original_stream):
+            self.original_stream = original_stream
+            self.muted_threads = set()
+        def write(self, data):
+            if threading.get_ident() in self.muted_threads: return
+            self.original_stream.write(data)
+        def flush(self):
+            try: self.original_stream.flush()
+            except: pass
 
-import torch
-from shared.utils.audio_video import save_video
+    sys.stdout = ThreadSafeMuter(sys.stdout)
+    sys.stderr = ThreadSafeMuter(sys.stderr)
 
-# ==== GPU & SYSTEM INFO ====
-print(f"GPU Engine Status: {torch.cuda.get_device_name()}")
-print(f"Total Available VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
-sys.stdout.flush()
+    # Bootstrap
+    WAN2GP_DIR = os.path.abspath("Wan2GP")
+    sys.path.insert(0, WAN2GP_DIR)
+    os.chdir(WAN2GP_DIR)
+    os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128,garbage_collection_threshold:0.5"
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# ==== Core Backend Opts ====
-torch.backends.cuda.enable_flash_sdp(False)
-torch.backends.cuda.enable_mem_efficient_sdp(True)
-torch.backends.cuda.enable_math_sdp(True)
+    # Hotpatch
+    ltx2_path = os.path.join(WAN2GP_DIR, "models/ltx2/ltx2.py")
+    if os.path.exists(ltx2_path):
+        with open(ltx2_path, "r") as f:
+            content = f.read()
+        old_line = "input_video_strength = max(0.0, min(1.0, input_video_strength))"
+        new_line = "input_video_strength = max(0.0, min(1.0, input_video_strength)) if input_video_strength is not None else 1.0"
+        if old_line in content:
+            content = content.replace(old_line, new_line)
+            with open(ltx2_path, "w") as f:
+                f.write(content)
+            print("✅ LTX2 Bug Patched!")
+print("Script started")
 
-# ==== LOAD TRANSFORMATION PIPELINE ====
-print("\n[Engine Initialization] Loading LTX-2.3 Model Matrix into VRAM...")
-sys.stdout.flush()
-
-from mmgp import offload
-from shared.utils import files_locator as fl
-
-fl.set_checkpoints_paths(["models", "ckpts", "."])
-from models.ltx2.ltx2_handler import family_handler
-
-base_model_type = "ltx2_22B"
-model_def = {"ltx2_pipeline": "distilled"}
-extra = family_handler.query_model_def(base_model_type, model_def)
-model_def.update(extra)
-
-gemma_folder = "models/gemma-3-12b-it-qat-q4_0-unquantized"
-gemma_files = sorted(glob.glob(os.path.join(gemma_folder, "*.safetensors")))
-quanto_files = [f for f in gemma_files if "quanto" in f]
-text_encoder_file = quanto_files[0] if quanto_files else (gemma_files[0] if gemma_files else None)
-
-transformer_path = os.path.join("models", "ltx-2.3-22b-distilled_diffusion_model_quanto_int8.safetensors")
-
-ltx2_model, pipe = family_handler.load_model(
-    model_filename=transformer_path,
-    model_type="ltx2_22B_distilled",
-    base_model_type=base_model_type,
-    model_def=model_def,
-    dtype=torch.bfloat16,
-    VAE_dtype=torch.float32,
-    text_encoder_filename=text_encoder_file,
+bot.send_message(
+    1972666456,
+    "✅ Kaggle runtime has started. Initializing models..."
 )
+    import torch
+    from shared.utils.audio_video import save_video
 
-# ==== Apply mmgp Budget Allocation Profile 4 ====
-offload.profile(
-    pipe,
-    profile_no=4,
-    quantizeTransformer=False,
-    convertWeightsFloatTo=torch.bfloat16,
-    budgets={
-        "transformer":  7000,
-        "text_encoder": 1500,
-        "vae":          2500,
-        "spatial_upsampler": 1500,
-        "video_encoder": 1500,
-        "*":             500,
-    },
-)
-offload.shared_state["_attention"] = "sdpa"
-print("✅ Hardware Layer Allocation Mapping Complete!")
-sys.stdout.flush()
+    print(f"GPU: {torch.cuda.get_device_name()}")
+    print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
 
-# ==== METRIC PROCESSING RESOLUTION PARSERS ====
-def get_resolution(base_res_str, aspect_ratio_str):
-    if base_res_str == "720p":
-        return 1024, 576  
-    else:
-        return 512, 288   
+    # Model Loading (your original code)
+    from mmgp import offload
+    from shared.utils import files_locator as fl
+    fl.set_checkpoints_paths(["models", "ckpts", "."])
+    from models.ltx2.ltx2_handler import family_handler
 
-def get_vae_tile_size(height, width):
-    return (256, 3) if max(height, width) > 480 else (0, 1)
+    base_model_type = "ltx2_22B"
+    model_def = {"ltx2_pipeline": "distilled"}
+    extra = family_handler.query_model_def(base_model_type, model_def)
+    model_def.update(extra)
 
-@torch.inference_mode()
-def Video_Generation(prompt, input_image_start, duration_dropdown, resolution_dropdown, telegram_callback=None):
+    gemma_folder = "models/gemma-3-12b-it-qat-q4_0-unquantized"
+    gemma_files = sorted(glob.glob(os.path.join(gemma_folder, "*.safetensors")))
+    quanto_files = [f for f in gemma_files if "quanto" in f]
+    text_encoder_file = quanto_files[0] if quanto_files else (gemma_files[0] if gemma_files else None)
+
+    transformer_path = os.path.join("models", "ltx-2.3-22b-distilled_diffusion_model_quanto_int8.safetensors")
+
+    ltx2_model, pipe = family_handler.load_model(
+        model_filename=transformer_path,
+        model_type="ltx2_22B_distilled",
+        base_model_type=base_model_type,
+        model_def=model_def,
+        dtype=torch.bfloat16,
+        VAE_dtype=torch.float32,
+        text_encoder_filename=text_encoder_file,
+    )
+
+    offload.profile(pipe, profile_no=4, quantizeTransformer=False, convertWeightsFloatTo=torch.bfloat16, budgets={
+        "transformer": 7000, "text_encoder": 1500, "vae": 2500,
+        "spatial_upsampler": 1500, "video_encoder": 1500, "*": 500,
+    })
+    offload.shared_state["_attention"] = "sdpa"
+    print("✅ Model Loaded Successfully!")
+
+    bot.send_message(CHAT_ID, "✅ **Model Loaded!** Bot is fully ready.\nSend `/start` to begin.", parse_mode="Markdown")
+
+except Exception as e:
+    print(f"❌ Error during loading: {e}")
+    traceback.print_exc()
     try:
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        duration_map = {
-            "3s": 73, "5s": 121, "10s": 241, "15s": 361, "20s": 481
-        }
-        num_frames = duration_map.get(duration_dropdown, 73)
-        seed = random.randint(0, 2**32 - 1)
-
-        image_start = None
-        if input_image_start and os.path.exists(input_image_start):
-            src_img = Image.open(input_image_start).convert("RGB")
-            src_w, src_h = src_img.size
-            
-            max_side = 1024 if resolution_dropdown == "720p" else 768
-            if max(src_w, src_h) > max_side:
-                scale = max_side / max(src_w, src_h)
-                src_w = int(src_w * scale)
-                src_h = int(src_h * scale)
-            
-            width = (src_w // 32) * 32
-            height = (src_h // 32) * 32
-            width = max(128, width)
-            height = max(128, height)
-            
-            image_start = src_img.resize((width, height), Image.Resampling.LANCZOS)
-            print(f"[Image Config] Active canvas dimension: {width}x{height}")
-            sys.stdout.flush()
-        else:
-            width, height = get_resolution(resolution_dropdown, "16:9 Landscape")
-
-        vae_tile_size, _ = get_vae_tile_size(height, width)
-        total_steps = [8]
-        current_step = [0]
-        current_pass = [1]
-        last_update_time = [0.0]
-
-        def cb(step, latent, is_start, override_num_inference_steps=None, pass_no=None, **kwargs):
-            if is_start:
-                if override_num_inference_steps is not None: total_steps[0] = override_num_inference_steps
-                if pass_no is not None: current_pass[0] = pass_no
-                current_step[0] = 0
-                return
-            current_step[0] += 1
-            frac = current_step[0] / max(total_steps[0], 1)
-            actual_percent = int((0.7 * frac * 100) if current_pass[0] == 1 else ((0.7 + 0.3 * frac) * 100))
-            if actual_percent > 100: actual_percent = 100
-            
-            now = time.time()
-            if telegram_callback and (now - last_update_time[0] >= 2.5 or actual_percent >= 98):
-                last_update_time[0] = now
-                blocks = min(10, max(0, int(actual_percent / 10)))
-                bar_graphic = "█" * blocks + "░" * (10 - blocks)
-                stage_name = "Drafting Structure" if current_pass[0] == 1 else "Polishing Details"
-                
-                progress_ui = (
-                    f"🎬 **Generation Progress:** `{actual_percent}%` Complete\n"
-                    f"`[{bar_graphic}]`\n"
-                    f"⚡ **Stage:** `{stage_name}`\n"
-                    f"⏳ *Steps remaining:* `{max(0, total_steps[0] - current_step[0])}`"
-                )
-                telegram_callback(progress_ui)
-
-        gen_kwargs = dict(
-            input_prompt=prompt, image_start=image_start, height=height, width=width,
-            frame_num=num_frames, fps=24.0, seed=seed, callback=cb,
-            VAE_tile_size=vae_tile_size, enhance_prompt=True,
-            input_video_strength=1.0
-        )
-
-        with HideCurrentThreadLogs():
-            result = ltx2_model.generate(**gen_kwargs)
-            
-        if result is None: return None, "Processing failed."
-        video_tensor = result.get("x") if isinstance(result, dict) else (result[0] if isinstance(result[0], tuple) else result)
-        video_tensor = video_tensor.cpu()
-        
-        out_path = tempfile.mktemp(suffix=".mp4")
-        video_for_save = (video_tensor.unsqueeze(0).float() / 127.5) - 1.0
-        
-        with HideCurrentThreadLogs():
-            save_video(tensor=video_for_save, save_file=out_path, fps=24.0, normalize=True, value_range=(-1, 1))
-        return out_path, "Success"
-
-    except Exception as e:
-        return None, str(e)
+        bot.send_message(CHAT_ID, "❌ Model loading failed. Check Kaggle logs.", parse_mode="Markdown")
+    except:
+        pass
 
 # ==== TELEGRAM CORE FRAMEWORK ENGINE ====
 import telebot
@@ -398,5 +305,13 @@ def process_text_input(message):
 print("\n📡 Connection successfully established with Telegram! Bot is now online.")
 sys.stdout.flush()
 
+print("📡 Bot is ready and listening...")
+sys.stdout.flush()
+
+try:
+    bot.infinity_polling(timeout=90, long_polling_timeout=90)
+except Exception as e:
+    print(f"Polling error: {e}")
+    traceback.print_exc()
 # Added broad long_polling timeouts to tolerate extended connection sleep/idling periods seamlessly
 bot.infinity_polling(timeout=90, long_polling_timeout=90)
