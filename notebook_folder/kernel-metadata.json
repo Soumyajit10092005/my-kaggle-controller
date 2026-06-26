@@ -1,12 +1,13 @@
 {
   "id": "fefgrgrtfhth/updated_telebot_wan_vid",
   "title": "updated_telebot_wan_vid",
-  "code_file": "wangp-telegram-integrated.ipynb",
+  "code_file": "run_ltx.py",
   "language": "python",
-  "kernel_type": "notebook",
+  "kernel_type": "script",
   "is_private": true,
   "enable_gpu": true,
   "enable_internet": true,
+  "enable_tpu": false,
   "dataset_sources": [],
   "kernel_sources": [],
   "competition_sources": []
