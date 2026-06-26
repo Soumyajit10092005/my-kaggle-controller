@@ -24,6 +24,11 @@ app = Flask(__name__)
 # 2. AUTOMATED REPAIR & METADATA UTILITIES
 # ==========================================
 def setup_kaggle_credentials():
+    print("=" * 50)
+print("BOT_TOKEN:", BOT_TOKEN is not None)
+print("KAGGLE_USERNAME:", repr(KAGGLE_USERNAME))
+print("KAGGLE_KEY exists:", KAGGLE_KEY is not None)
+print("=" * 50)
     """Configures the classic Kaggle CLI credentials layout."""
     if not KAGGLE_KEY or not KAGGLE_USERNAME:
         print("⚠️ Kaggle credentials missing from Render environment variables!")
