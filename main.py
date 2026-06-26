@@ -161,10 +161,9 @@ def track_kaggle_progress(chat_id, status_msg_id, kernel_id):
         time.sleep(15) 
         
         result = subprocess.run(
-            ["kaggle", "kernels", "push", "-p", NOTEBOOK_DIR],
+            ["kaggle", "kernels", "status", kernel_id],
             capture_output=True,
             text=True,
-            timeout=90,
             env=os.environ
         )
         print("=" * 60)
@@ -244,11 +243,26 @@ def push_and_run_notebook(chat_id):
         # Push + Run
         result = subprocess.run(
             ["kaggle", "kernels", "push", "-p", NOTEBOOK_DIR],
-            capture_output=True, text=True, timeout=300
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=os.environ
         )
 
+        print("=" * 80)
+        print("RETURN CODE:", result.returncode)
+        print("STDOUT:")
+        print(result.stdout)
+        print("STDERR:")
+        print(result.stderr)
+        print("=" * 80)
+
         if result.returncode != 0:
-            bot.edit_message_text(f"❌ Push failed:\n{result.stderr[:500]}", chat_id, status_msg.message_id)
+            bot.edit_message_text(
+                "❌ Push failed. Check Render logs.",
+                chat_id,
+                status_msg.message_id
+            )
             return
 
         kernel_id = get_kernel_id()
