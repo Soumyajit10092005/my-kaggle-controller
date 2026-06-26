@@ -5,7 +5,10 @@ import threading
 import subprocess
 from flask import Flask
 import telebot
+import os
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+NOTEBOOK_DIR = os.path.join(BASE_DIR, "notebook_folder")
 # ==========================================
 # 1. CONFIGURATION & CORE INITIALIZATION
 # ==========================================
@@ -32,7 +35,7 @@ def setup_kaggle_credentials():
     """Configures the classic Kaggle CLI credentials layout."""
     if not KAGGLE_KEY or not KAGGLE_USERNAME:
         print("⚠️ Kaggle credentials missing from Render environment variables!")
-        return
+        return False
 
     clean_username = KAGGLE_USERNAME.strip("'\" \n\r")
     clean_key = KAGGLE_KEY.strip("'\" \n\r")
@@ -158,9 +161,19 @@ def track_kaggle_progress(chat_id, status_msg_id, kernel_id):
         time.sleep(15) 
         
         result = subprocess.run(
-            ["kaggle", "kernels", "status", kernel_id],
-            capture_output=True, text=True, env=os.environ
+            ["kaggle", "kernels", "push", "-p", NOTEBOOK_DIR],
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=os.environ
         )
+        print("=" * 60)
+        print("RETURN CODE:", result.returncode)
+        print("STDOUT:")
+        print(result.stdout)
+        print("STDERR:")
+        print(result.stderr)
+        print("=" * 60)
         output = result.stdout.lower() + result.stderr.lower()
         
         if "queued" in output:
@@ -231,7 +244,7 @@ def push_and_run_notebook(chat_id):
         # Push + Run
         result = subprocess.run(
             ["kaggle", "kernels", "push", "-p", NOTEBOOK_DIR],
-            capture_output=True, text=True, timeout=90
+            capture_output=True, text=True, timeout=300
         )
 
         if result.returncode != 0:
