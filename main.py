@@ -336,12 +336,25 @@ def push_and_run_notebook(chat_id):
 # 6. EXECUTION ROUTERS
 # ==========================================
 def run_tg_bot():
+    print("=== Starting Telegram bot ===")
+
     try:
-        bot.delete_webhook(drop_pending_updates=True)
-    except:
-        pass
-    print("📡 Starting Telegram listener loop...")
-    bot.infinity_polling()
+        print("Deleting webhook...")
+        r = bot.delete_webhook(drop_pending_updates=True)
+        print("delete_webhook returned:", r)
+    except Exception as e:
+        print("delete_webhook exception:", e)
+
+    print("Starting polling...")
+
+    try:
+        bot.infinity_polling(
+            timeout=60,
+            long_polling_timeout=60,
+            skip_pending=True
+        )
+    except Exception as e:
+        print("Polling exception:", e)
 
 
 if __name__ == "__main__":
