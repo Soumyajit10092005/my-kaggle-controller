@@ -54,10 +54,10 @@ def setup_kaggle_credentials():
         # Apply corrections
         fix_metadata_username(clean_username)
         fix_notebook_and_cells()
-
+        return True
     except Exception as e:
         print(f"❌ Failed to set up Kaggle credentials: {e}")
-
+        return False
 
 def fix_metadata_username(clean_username):
     metadata_path = "./notebook_folder/kernel-metadata.json"
