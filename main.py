@@ -198,39 +198,50 @@ def home():
 # 5. TELEGRAM BOT EVENT HANDLERS
 # ==========================================
 @bot.message_handler(commands=['ready'])
-def trigger_kaggle_instance(message):
+def handle_ready(message):
     chat_id = message.chat.id
-    status_msg = bot.send_message(chat_id, "🚀 Synchronizing keys and sending runtime payload to Kaggle...")
+    bot.reply_to(message, "🚀 **Waking up Kaggle Notebook...**")
     
-    setup_kaggle_credentials()
+    if not setup_kaggle_credentials():
+        bot.send_message(chat_id, "❌ Kaggle credentials missing!")
+        return
     
-    try:
-        result = subprocess.run(
-            ["kaggle", "kernels", "push", "-p", "./notebook_folder"], 
-            capture_output=True, text=True, env=os.environ  
-        )
-        
-        if result.returncode == 0:
-            kernel_id = get_kernel_id()
-            bot.edit_message_text(
-                f"📡 **Payload Delivered Successfully!**\n\nStarting telemetry tracking engine for `{kernel_id}`...",
-                chat_id, status_msg.message_id
-            )
-            threading.Thread(
-                target=track_kaggle_progress, 
-                args=(chat_id, status_msg.message_id, kernel_id), 
-                daemon=True
-            ).start()
-        else:
-            stderr_lines = result.stderr.splitlines()
-            filtered_errors = [line for line in stderr_lines if "SyntaxWarning" not in line and "site-packages/kaggle" not in line]
-            real_error = "\n".join(filtered_errors).strip() or result.stdout.strip()
-            clean_error = real_error.replace("`", "").replace("*", "").replace("_", "")
-            bot.edit_message_text(f"❌ *Kaggle API Handshake Refused*:\n\n```\n{clean_error}\n```", chat_id, status_msg.message_id, parse_mode="Markdown")
-            
-    except Exception as e:
-        bot.send_message(chat_id, f"❌ Controller Exception:\n`{str(e)}`", parse_mode="Markdown")
+    threading.Thread(target=push_and_run_notebook, args=(chat_id,), daemon=True).start()
 
+def push_and_run_notebook(chat_id):
+    try:
+        status_msg = bot.send_message(chat_id, "📤 Pushing notebook to Kaggle...")
+
+        # Update kernel metadata username
+        metadata_path = os.path.join(NOTEBOOK_DIR, "kernel-metadata.json")
+        if os.path.exists(metadata_path):
+            with open(metadata_path, "r") as f:
+                meta = json.load(f)
+            if not meta.get("id", "").startswith(f"{KAGGLE_USERNAME}/"):
+                slug = meta.get("id", "").split("/")[-1] or "ltx-video-bot"
+                meta["id"] = f"{KAGGLE_USERNAME}/{slug}"
+                with open(metadata_path, "w") as f:
+                    json.dump(meta, f, indent=4)
+
+        # Push + Run
+        result = subprocess.run(
+            ["kaggle", "kernels", "push", "-p", NOTEBOOK_DIR],
+            capture_output=True, text=True, timeout=90
+        )
+
+        if result.returncode != 0:
+            bot.edit_message_text(f"❌ Push failed:\n{result.stderr[:500]}", chat_id, status_msg.message_id)
+            return
+
+        kernel_id = get_kernel_id()
+        bot.edit_message_text(f"✅ **Notebook pushed & running!**\nKernel: `{kernel_id}`\n\nWaiting for confirmation from Kaggle Bot...", 
+                            chat_id, status_msg.message_id, parse_mode="Markdown")
+
+        # Optional: start tracking
+        threading.Thread(target=track_kaggle_progress, args=(chat_id, status_msg.message_id, kernel_id), daemon=True).start()
+
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Error waking Kaggle: {str(e)}")
 
 # ==========================================
 # 6. EXECUTION ROUTERS
