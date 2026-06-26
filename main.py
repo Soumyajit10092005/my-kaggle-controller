@@ -29,7 +29,8 @@ app = Flask(__name__)
 def setup_kaggle_credentials():
     print("=" * 50)
     print("BOT_TOKEN:", BOT_TOKEN is not None)
-    print("KAGGLE_USERNAME:", repr(KAGGLE_USERNAME))
+    print("Original username:", repr(KAGGLE_USERNAME))
+   
     print("KAGGLE_KEY exists:", KAGGLE_KEY is not None)
     print("=" * 50)
     """Configures the classic Kaggle CLI credentials layout."""
@@ -39,6 +40,13 @@ def setup_kaggle_credentials():
 
     clean_username = KAGGLE_USERNAME.strip("'\" \n\r")
     clean_key = KAGGLE_KEY.strip("'\" \n\r")
+
+    print("=" * 50)
+    print("BOT_TOKEN:", BOT_TOKEN is not None)
+    print("Original username:", repr(KAGGLE_USERNAME))
+    print("Clean username:", repr(clean_username))
+    print("KAGGLE_KEY exists:", KAGGLE_KEY is not None)
+    print("=" * 50)
 
     try:
         kaggle_dir = "/opt/render/.kaggle"
@@ -231,16 +239,31 @@ def push_and_run_notebook(chat_id):
 
         # Update kernel metadata username
         metadata_path = os.path.join(NOTEBOOK_DIR, "kernel-metadata.json")
+        clean_username = KAGGLE_USERNAME.strip("'\" \n\r")
         if os.path.exists(metadata_path):
             with open(metadata_path, "r") as f:
                 meta = json.load(f)
-            if not meta.get("id", "").startswith(f"{KAGGLE_USERNAME}/"):
+            if not meta.get("id", "").startswith(f"{clean_username}/"):
                 slug = meta.get("id", "").split("/")[-1] or "ltx-video-bot"
-                meta["id"] = f"{KAGGLE_USERNAME}/{slug}"
+                meta["id"] = f"{clean_username}/{slug}"
                 with open(metadata_path, "w") as f:
                     json.dump(meta, f, indent=4)
 
         # Push + Run
+        print("=" * 80)
+        print("Testing Kaggle CLI...")
+
+        ver = subprocess.run(
+            ["kaggle", "--version"],
+            capture_output=True,
+            text=True
+        )
+
+        print("Kaggle version:")
+        print(ver.stdout)
+        print(ver.stderr)
+
+        print("=" * 80)
         result = subprocess.run(
             ["kaggle", "kernels", "push", "-p", NOTEBOOK_DIR],
             capture_output=True,
@@ -248,7 +271,22 @@ def push_and_run_notebook(chat_id):
             timeout=300,
             env=os.environ
         )
+        print("=" * 80)
+        print("Notebook directory:", NOTEBOOK_DIR)
+        print("Files:")
+        print(os.listdir(NOTEBOOK_DIR))
+        print("=" * 80)
 
+        metadata_file = os.path.join(NOTEBOOK_DIR, "kernel-metadata.json")
+
+        if os.path.exists(metadata_file):
+            print("kernel-metadata.json")
+            with open(metadata_file) as f:
+                print(f.read())
+        else:
+            print("kernel-metadata.json NOT FOUND")
+
+        print("=" * 80)
         print("=" * 80)
         print("RETURN CODE:", result.returncode)
         print("STDOUT:")
@@ -258,8 +296,27 @@ def push_and_run_notebook(chat_id):
         print("=" * 80)
 
         if result.returncode != 0:
+            print("=" * 80)
+            print("KAGGLE PUSH FAILED")
+            print("Return code:", result.returncode)
+            print("STDOUT:")
+            print(result.stdout)
+            print("STDERR:")
+            print(result.stderr)
+            print("=" * 80)
+
+            error = (
+                "❌ Push failed.\n\n"
+                "STDOUT:\n"
+                + result.stdout
+                + "\n\nSTDERR:\n"
+                + result.stderr
+            )
+
+            print(error)
+
             bot.edit_message_text(
-                "❌ Push failed. Check Render logs.",
+                error[:3900],
                 chat_id,
                 status_msg.message_id
             )
